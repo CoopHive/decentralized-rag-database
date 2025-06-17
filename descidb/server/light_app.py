@@ -43,6 +43,31 @@ class UserStatusResponse(BaseModel):
     papers_directory: str
     mappings_file_path: str
 
+class EmailValidationRequest(BaseModel):
+    email: str
+
+class EmailValidationResponse(BaseModel):
+    isValid: bool
+
+def load_whitelisted_emails() -> set:
+    """Load whitelisted emails from the text file"""
+    whitelist_path = Path(__file__).parent / "whitelisted_emails.txt"
+    if not whitelist_path.exists():
+        return set()
+    
+    with open(whitelist_path, 'r') as f:
+        return {email.strip().lower() for email in f.readlines() if email.strip()}
+
+@app.post("/api/auth/validate-email")
+async def validate_email(request: EmailValidationRequest):
+    """Validate if an email is whitelisted"""
+    try:
+        whitelisted_emails = load_whitelisted_emails()
+        is_valid = request.email.lower() in whitelisted_emails
+        return EmailValidationResponse(isValid=is_valid)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error validating email: {str(e)}")
+
 @app.post("/api/evaluate")
 async def evaluate_endpoint(request: EvaluationRequest):
     """Endpoint for evaluation - fast queries"""

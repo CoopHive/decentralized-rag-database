@@ -124,28 +124,30 @@ def query_collection(collection_name, user_query, db_path=None, user_email=None)
 
         result = {"query": user_query, "results": []}
 
-        if values["ids"] and len(values["ids"][0]) > 0:
-            for i in range(len(values["ids"][0])):
-                result["results"].append(
-                    {
-                        "document": values["documents"][0][i]
-                        if i < len(values["documents"][0])
-                        else "",
-                        "metadata": values["metadatas"][0][i]
-                        if i < len(values["metadatas"][0])
-                        else {},
-                        "distance": values["distances"][0][i]
-                        if i < len(values["distances"][0])
-                        else 0,
-                    }
-                )
+        # Check if we have any results
+        if not values["ids"] or not values["ids"][0]:
+            logger.warning(f"No results found for query: '{user_query[:50]}...'")
+            return json.dumps({"query": user_query, "results": []})
 
+        # Process results
+        for i in range(len(values["ids"][0])):
+            try:
+                result["results"].append({
+                    "document": values["documents"][0][i] if values["documents"] and i < len(values["documents"][0]) else "",
+                    "metadata": values["metadatas"][0][i] if values["metadatas"] and i < len(values["metadatas"][0]) else {},
+                    "distance": values["distances"][0][i] if values["distances"] and i < len(values["distances"][0]) else 0,
+                })
+            except IndexError as e:
+                logger.warning(f"Index error processing result {i}: {e}")
+                continue
+
+        if result["results"]:
             logger.info(f"Found {len(result['results'])} results for query")
             return json.dumps(result)
         else:
-            logger.warning(f"No results found for query: '{user_query[:50]}...'")
+            logger.warning(f"No valid results found for query: '{user_query[:50]}...'")
             return json.dumps({"query": user_query, "results": []})
 
     except Exception as e:
         logger.error(f"Error querying collection: {e}")
-        return json.dumps({"error": str(e)})
+        return json.dumps({"query": user_query, "error": str(e), "results": []})

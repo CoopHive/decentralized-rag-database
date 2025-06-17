@@ -96,10 +96,29 @@ class EvaluationAgent:
             try:
                 result_json = query_collection(collection_name, query, db_path, user_email)
                 result_data = json.loads(result_json)
-                collection_results[collection_name] = result_data
+                
+                # Check if the result contains an error
+                if "error" in result_data:
+                    logger.error(f"Error in collection {collection_name}: {result_data['error']}")
+                    collection_results[collection_name] = {
+                        "error": result_data["error"],
+                        "results": []
+                    }
+                else:
+                    collection_results[collection_name] = result_data
+                    
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response from collection {collection_name}: {e}")
+                collection_results[collection_name] = {
+                    "error": f"Failed to parse response: {str(e)}",
+                    "results": []
+                }
             except Exception as e:
                 logger.error(f"Error querying collection {collection_name}: {e}")
-                collection_results[collection_name] = {"error": str(e)}
+                collection_results[collection_name] = {
+                    "error": str(e),
+                    "results": []
+                }
 
         with open(results_file, "w") as f:
             json.dump(all_results, f, indent=2)
