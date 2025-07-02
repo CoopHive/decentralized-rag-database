@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from src.utils.logging_utils import get_logger
+from src.utils.logging_utils import get_logger, get_user_logger
 
 # Get module logger
 logger = get_logger(__name__)
@@ -27,17 +27,24 @@ class DatabaseCreator:
     relationships and inserts them into ChromaDB collections.
     """
 
-    def __init__(self, graph, vector_db_manager):
+    def __init__(self, graph, vector_db_manager, user_email=None):
         """
         Initialize the DatabaseCreator.
 
         Args:
             graph: IPFSNeo4jGraph instance for graph database operations
             vector_db_manager: VectorDatabaseManager instance for vector database operations
+            user_email: Optional user email for user-specific logging
         """
         self.graph = graph
         self.vector_db_manager = vector_db_manager
-        self.logger = get_logger(__name__ + ".DatabaseCreator")
+        self.user_email = user_email
+        
+        # Use user-specific logger if user_email is provided
+        if user_email:
+            self.logger = get_user_logger(user_email, "database_creator")
+        else:
+            self.logger = get_logger(__name__ + ".DatabaseCreator")
 
     def query_lighthouse_for_embedding(self, cid):
         """

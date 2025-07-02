@@ -15,7 +15,7 @@ import requests
 from dotenv import load_dotenv
 
 from src.query.query_db import query_collection, discover_user_collections
-from src.utils.logging_utils import get_logger
+from src.utils.logging_utils import get_logger, get_user_logger
 
 # Get module logger
 logger = get_logger(__name__)
@@ -65,6 +65,9 @@ class EvaluationAgent:
         Returns:
             Path to the temporary JSON file containing all results
         """
+        # Use user-specific logger if user_email is available
+        user_logger = get_user_logger(user_email, "evaluation_agent") if user_email else logger
+        
         timestamp = int(time.time())
         
         # Use user-specific temp directory if user_email is provided
@@ -76,10 +79,10 @@ class EvaluationAgent:
             results_file = self.temp_dir / f"query_results_{timestamp}.json"
 
         # Auto-discover collections if not provided and user_email is available
-        logger.info(f"Auto-discovering collections for user: {user_email}")
+        user_logger.info(f"Auto-discovering collections for user: {user_email}")
         collection_names = discover_user_collections(user_email, db_path)
         if not collection_names:
-            logger.warning(f"No collections found for user: {user_email}")
+            user_logger.warning(f"No collections found for user: {user_email}")
             collection_names = []
 
         collection_results: Dict[str, Any] = {}
@@ -92,19 +95,19 @@ class EvaluationAgent:
         }
 
         for collection_name in collection_names:
-            logger.info(f"Querying collection: {collection_name}")
+            user_logger.info(f"Querying collection: {collection_name}")
             try:
                 result_json = query_collection(collection_name, query, db_path, user_email)
                 result_data = json.loads(result_json)
                 collection_results[collection_name] = result_data
             except Exception as e:
-                logger.error(f"Error querying collection {collection_name}: {e}")
+                user_logger.error(f"Error querying collection {collection_name}: {e}")
                 collection_results[collection_name] = {"error": str(e)}
 
         with open(results_file, "w") as f:
             json.dump(all_results, f, indent=2)
 
-        logger.info(f"Saved query results to {results_file}")
+        user_logger.info(f"Saved query results to {results_file}")
         return str(results_file)
 
     def evaluate_results(self, results_file: str) -> Dict[str, Any]:
@@ -122,7 +125,11 @@ class EvaluationAgent:
             all_results = json.load(f)
 
         original_query = all_results["query"]
+        user_email = all_results.get("user_email")
         collections = all_results["collection_results"]
+
+        # Use user-specific logger if user_email is available
+        user_logger = get_user_logger(user_email, "evaluation_agent") if user_email else logger
 
         evaluation = {
             "query": original_query,
@@ -162,11 +169,11 @@ class EvaluationAgent:
                 eval_data = json.loads(evaluation_text)
                 evaluation.update(eval_data)
             except json.JSONDecodeError:
-                logger.error(f"Failed to parse evaluation results: {evaluation_text}")
+                user_logger.error(f"Failed to parse evaluation results: {evaluation_text}")
                 evaluation["error"] = "Failed to parse evaluation results"
                 evaluation["raw_response"] = evaluation_text
         except Exception as e:
-            logger.error(f"Error evaluating results with model {self.model_name}: {e}")
+            user_logger.error(f"Error evaluating results with model {self.model_name}: {e}")
             evaluation["error"] = str(e)
 
         eval_file = Path(results_file).with_name(
@@ -175,7 +182,7 @@ class EvaluationAgent:
         with open(eval_file, "w") as f:
             json.dump(evaluation, f, indent=2)
 
-        logger.info(f"Saved evaluation to {eval_file}")
+        user_logger.info(f"Saved evaluation to {eval_file}")
         return evaluation
 
     def _generate_evaluation_prompt(

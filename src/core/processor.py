@@ -18,7 +18,7 @@ from src.core.chunker import chunk
 from src.core.converter import convert
 from src.core.embedder import embed
 from src.db.graph_db import IPFSNeo4jGraph
-from src.utils.logging_utils import get_logger
+from src.utils.logging_utils import get_logger, get_user_logger
 
 # Get module logger
 logger = get_logger(__name__)
@@ -45,7 +45,9 @@ class Processor:
             user_email: Email of the user for creating user-specific folders
             project_root: Path to project root directory
         """
-        self.logger = get_logger(__name__ + ".Processor")
+        # Use user-specific logger
+        self.logger = get_user_logger(user_email, "processor") if user_email else get_logger(__name__ + ".Processor")
+        
         self.metadata_file = metadata_file
         self.authorPublicKey = authorPublicKey  # Author Public Key
         self.ipfs_api_key = ipfs_api_key  # IPFS API Key
@@ -134,11 +136,9 @@ class Processor:
         """
         try:
             object_str = str(object)
-            self.logger.info(f"Uploading to Lighthouse: {object_str}")
             ipfs_cid = self.__upload_text_to_lighthouse(object_str)
 
             hash_value = ipfs_cid.split("ipfs/")[-1]
-            self.logger.info(f"Generated IPFS CID: {hash_value}")
 
             file_path = os.path.join(git_path, f"{hash_value}.txt")
 
@@ -296,11 +296,9 @@ class Processor:
             global_mappings = self.__read_mappings(global_mappings_path)
             
             if metadata["pdf_ipfs_cid"] in global_mappings and db_combination in global_mappings[metadata["pdf_ipfs_cid"]]:
-                self.logger.info(f"PDF {metadata['pdf_ipfs_cid']} with {db_combination} already processed globally. Skipping processing, updating user mappings only.")
                 self.__update_mappings(metadata["pdf_ipfs_cid"], db_combination)
                 continue
 
-            self.logger.info(f"Processing PDF {metadata['pdf_ipfs_cid']} with {db_combination}")
 
             # Step 2.1: Conversion
             # Check if markdown conversion already exists for this PDF CID
@@ -310,9 +308,6 @@ class Processor:
 
             # If the conversion already exists, use the existing conversion
             if converted_text_ipfs_cid:
-                self.logger.info(
-                    f"Found existing markdown conversion: {converted_text_ipfs_cid}"
-                )
                 # Fetch converted text content from IPFS
                 converted_text = self.graph_db._query_ipfs_content(
                     converted_text_ipfs_cid

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 from src.db.chroma_client import VectorDatabaseManager
 from src.db.db_creator import DatabaseCreator
 from src.db.graph_db import IPFSNeo4jGraph
-from src.utils.logging_utils import get_logger
+from src.utils.logging_utils import get_logger, get_user_logger
 
 # Get module logger
 logger = get_logger(__name__)
@@ -47,6 +47,9 @@ def load_config():
 
 def increment_job_progress(user_email, increment=1):
     """Increment completed job count for user"""
+    # Create user-specific logger for this operation
+    user_logger = get_user_logger(user_email, "job_progress")
+    
     jobs_file = PROJECT_ROOT / "temp" / "jobs.json"
     try:
         if jobs_file.exists():
@@ -59,13 +62,13 @@ def increment_job_progress(user_email, increment=1):
                     
                     with open(jobs_file, 'w') as f:
                         json.dump(jobs, f, indent=2)
-                    print(f"[DB_CREATOR] Incremented job progress for {user_email}: {jobs[user_email][1]}/{jobs[user_email][0]}")
+                    user_logger.debug(f"Incremented job progress: {jobs[user_email][1]}/{jobs[user_email][0]}")
                 else:
-                    print(f"[DB_CREATOR] Invalid job structure for {user_email}")
+                    user_logger.error(f"Invalid job structure for {user_email}")
             else:
-                print(f"[DB_CREATOR] No job found for {user_email}")
+                user_logger.warning(f"No job found for {user_email}")
     except Exception as e:
-        print(f"[DB_CREATOR] Error updating job progress: {e}")
+        user_logger.error(f"Error updating job progress: {e}")
 
 
 def create_user_database(user_email: str):
@@ -75,6 +78,9 @@ def create_user_database(user_email: str):
     Args:
         user_email: Email of the user for creating user-specific database
     """
+    # Create user-specific logger for this operation
+    user_logger = get_user_logger(user_email, "database_creation")
+    
     # Load configuration
     config = load_config()
 
@@ -88,7 +94,7 @@ def create_user_database(user_email: str):
         neo4j_config["password"].replace("${", "").replace("}", "")
     )
 
-    logger.info(f"Creating databases for user: {user_email}")
+    user_logger.info(f"Creating databases for user: {user_email}")
 
     # Initialize Neo4j graph
     graph = IPFSNeo4jGraph(
@@ -101,8 +107,8 @@ def create_user_database(user_email: str):
     mapping_embed_file_path = user_temp_path / "mapping_embed.json"
 
     if not mappings_file_path.exists():
-        logger.error(f"No mappings.json file found for user {user_email}. Please run processor first.")
-        logger.error(f"Checked path: {mappings_file_path}")
+        user_logger.error(f"No mappings.json file found for user {user_email}. Please run processor first.")
+        user_logger.error(f"Checked path: {mappings_file_path}")
         return
 
     # Load mappings
@@ -110,7 +116,7 @@ def create_user_database(user_email: str):
         mappings = json.load(file)
 
     if not mappings:
-        logger.warning(f"Empty mappings file for user {user_email}")
+        user_logger.warning(f"Empty mappings file for user {user_email}")
         return
 
     # Load existing embedded mappings if they exist
@@ -119,12 +125,12 @@ def create_user_database(user_email: str):
         try:
             with open(mapping_embed_file_path, "r") as file:
                 mapping_embed = json.load(file)
-            logger.info(f"Loaded existing mapping_embed.json with {len(mapping_embed)} entries")
+            user_logger.info(f"Loaded existing mapping_embed.json with {len(mapping_embed)} entries")
         except Exception as e:
-            logger.warning(f"Error loading mapping_embed.json: {e}. Starting fresh.")
+            user_logger.warning(f"Error loading mapping_embed.json: {e}. Starting fresh.")
             mapping_embed = {}
     else:
-        logger.info("No existing mapping_embed.json found. Starting fresh.")
+        user_logger.info("No existing mapping_embed.json found. Starting fresh.")
 
     # Find what needs to be processed (items in mappings but not in mapping_embed)
     items_to_process = {}
@@ -141,10 +147,10 @@ def create_user_database(user_email: str):
                 items_to_process[pdf_cid] = new_combinations
 
     if not items_to_process:
-        logger.info("No new items to process. All mappings are already embedded.")
+        user_logger.info("No new items to process. All mappings are already embedded.")
         return
 
-    logger.info(f"Found {sum(len(combos) for combos in items_to_process.values())} new CID-database combinations to process")
+    user_logger.info(f"Found {sum(len(combos) for combos in items_to_process.values())} new CID-database combinations to process")
 
     # Get all unique database names from items to process
     db_names = set()
@@ -152,24 +158,24 @@ def create_user_database(user_email: str):
         for db_combination in db_combinations:
             db_names.add(db_combination)
       
-    logger.info(f"Discovered {len(db_names)} unique databases: {sorted(db_names)}")
+    user_logger.info(f"Discovered {len(db_names)} unique databases: {sorted(db_names)}")
 
     # Set up user-specific vector database path
     base_db_path = PROJECT_ROOT / config["vector_db"]["path"]
     user_db_path = base_db_path / user_email
     os.makedirs(user_db_path, exist_ok=True)
-    logger.info(f"Using database path: {user_db_path}")
+    user_logger.info(f"Using database path: {user_db_path}")
 
     # Initialize database manager with the specific db names found in mappings
     vector_db_manager = VectorDatabaseManager(list(db_names), db_path=str(user_db_path))
-    create_db = DatabaseCreator(graph, vector_db_manager)
+    create_db = DatabaseCreator(graph, vector_db_manager, user_email)
 
     # Process only the new CID-database combinations
     total_processed = 0
     successfully_processed = {}
     
     for pdf_cid, db_combinations in items_to_process.items():
-        logger.info(f"Processing CID {pdf_cid} with {len(db_combinations)} new database combinations")
+        user_logger.info(f"Processing CID {pdf_cid} with {len(db_combinations)} new database combinations")
         
         successfully_processed[pdf_cid] = []
         
@@ -178,7 +184,7 @@ def create_user_database(user_email: str):
             # Handle case where chunker name might contain underscores (e.g., fixed_length)
             parts = db_combination.split("_")
             if len(parts) < 3:
-                logger.error(f"Invalid database combination format: {db_combination}")
+                user_logger.error(f"Invalid database combination format: {db_combination}")
                 continue
             
             # For combinations like "markitdown_fixed_length_bge", we need to parse carefully
@@ -196,13 +202,12 @@ def create_user_database(user_email: str):
             ]
             
             try:
-                logger.info(f"Adding CID {pdf_cid} to database '{db_combination}'")
                 create_db.process_paths(pdf_cid, relationship_path, db_combination)
                 successfully_processed[pdf_cid].append(db_combination)
                 total_processed += 1
                 increment_job_progress(user_email, 1)
             except Exception as e:
-                logger.error(f"Error processing {pdf_cid} with {db_combination}: {e}")
+                user_logger.error(f"Error processing {pdf_cid} with {db_combination}: {e}")
                 continue
 
     # Update mapping_embed.json with successfully processed items
@@ -221,11 +226,11 @@ def create_user_database(user_email: str):
     try:
         with open(mapping_embed_file_path, "w") as file:
             json.dump(mapping_embed, file, indent=2)
-        logger.info(f"Updated mapping_embed.json with {total_processed} new entries")
+        user_logger.info(f"Updated mapping_embed.json with {total_processed} new entries")
     except Exception as e:
-        logger.error(f"Error saving mapping_embed.json: {e}")
+        user_logger.error(f"Error saving mapping_embed.json: {e}")
 
-    logger.info(f"Completed processing {total_processed} CID-database combinations for user {user_email}")
+    user_logger.info(f"Completed processing {total_processed} CID-database combinations for user {user_email}")
 
 
 def main():

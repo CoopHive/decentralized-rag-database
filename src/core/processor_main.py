@@ -18,7 +18,7 @@ import yaml
 from dotenv import load_dotenv
 
 from src.core.processor import Processor
-from src.utils.logging_utils import get_logger
+from src.utils.logging_utils import get_logger, get_user_logger
 
 # Get module logger
 logger = get_logger(__name__)
@@ -168,7 +168,10 @@ async def process_combination(converter: str, chunker: str, embedder: str, paper
         user_papers_dir: Path to the papers directory (user-specific)
         user_email: Email of the user for user-specific database path
     """
-    logger.info(f"Processing combination: {converter}_{chunker}_{embedder}")
+    # Create user-specific logger for this processing session
+    user_logger = get_user_logger(user_email, "processor")
+    
+    user_logger.info(f"Processing combination: {converter}_{chunker}_{embedder}")
     
     # Load configuration
     config = load_config()
@@ -212,10 +215,10 @@ async def process_combination(converter: str, chunker: str, embedder: str, paper
         paper_path = papers_directory / paper_filename
         
         if not paper_path.exists():
-            logger.warning(f"Paper not found: {paper_path}")
+            user_logger.warning(f"Paper not found: {paper_path}")
             continue
             
-        logger.info(f"Processing {paper_path} with {converter}_{chunker}_{embedder}...")
+        user_logger.info(f"Processing {paper_path} with {converter}_{chunker}_{embedder}...")
         random_data = os.urandom(32)
         hash_value = hashlib.sha256(random_data).hexdigest()
 
@@ -230,7 +233,7 @@ async def process_combination(converter: str, chunker: str, embedder: str, paper
             # Change back to the original directory after git init
             os.chdir(current_dir)
         except Exception as e:
-            logger.error(f"Error initializing git repository: {e}")
+            user_logger.error(f"Error initializing git repository: {e}")
             continue
 
         try:
@@ -246,12 +249,12 @@ async def process_combination(converter: str, chunker: str, embedder: str, paper
             )
             
             if success:
-                logger.info(f"Successfully processed {paper_filename} with {converter}_{chunker}_{embedder}")
+                user_logger.info(f"Successfully processed {paper_filename} with {converter}_{chunker}_{embedder}")
                 increment_job_progress(user_email)
             else:
-                logger.error(f"Error processing {paper_filename} with {converter}_{chunker}_{embedder}: {error}")
+                user_logger.error(f"Error processing {paper_filename} with {converter}_{chunker}_{embedder}: {error}")
         except Exception as e:
-            logger.error(f"Error processing {paper_filename} with {converter}_{chunker}_{embedder}: {e}")
+            user_logger.error(f"Error processing {paper_filename} with {converter}_{chunker}_{embedder}: {e}")
 
         # Small async sleep to yield control back to the event loop
         await asyncio.sleep(0.1)
@@ -259,6 +262,9 @@ async def process_combination(converter: str, chunker: str, embedder: str, paper
 
 def increment_job_progress(user_email):
     """Increment completed job count for user"""
+    # Create user-specific logger for this operation
+    user_logger = get_user_logger(user_email, "job_progress")
+    
     jobs_file = PROJECT_ROOT / "temp" / "jobs.json"
     try:
         if jobs_file.exists():
@@ -271,12 +277,13 @@ def increment_job_progress(user_email):
                     
                     with open(jobs_file, 'w') as f:
                         json.dump(jobs, f, indent=2)
+                    user_logger.debug(f"Incremented job progress: {jobs[user_email][1]}/{jobs[user_email][0]}")
                 else:
-                    print(f"[PROCESSOR] Invalid job structure for {user_email}")
+                    user_logger.error(f"Invalid job structure for {user_email}")
             else:
-                print(f"[PROCESSOR] No job found for {user_email}")
+                user_logger.warning(f"No job found for {user_email}")
     except Exception as e:
-        print(f"[PROCESSOR] Error updating job progress: {e}")
+        user_logger.error(f"Error updating job progress: {e}")
 
 
 if __name__ == "__main__":

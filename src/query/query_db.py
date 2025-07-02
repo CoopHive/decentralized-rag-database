@@ -14,7 +14,7 @@ import chromadb
 from dotenv import load_dotenv
 
 from src.core.embedder import embed
-from src.utils.logging_utils import get_logger
+from src.utils.logging_utils import get_logger, get_user_logger
 
 # Get module logger
 logger = get_logger(__name__)
@@ -33,27 +33,30 @@ def discover_user_collections(user_email: str, db_path: str = None) -> List[str]
     Returns:
         List of collection names available for the user
     """
+    # Use user-specific logger
+    user_logger = get_user_logger(user_email, "query_db") if user_email else logger
+    
     try:
         # Construct user-specific database path
         db_path = Path(db_path)
         
         if not db_path.exists():
-            logger.warning(f"Database path does not exist: {db_path}")
+            user_logger.warning(f"Database path does not exist: {db_path}")
             return []
         
-        logger.info(f"Discovering collections in: {db_path}")
+        user_logger.info(f"Discovering collections in: {db_path}")
         
         # Connect to ChromaDB and list collections
         client = chromadb.PersistentClient(path=str(db_path))
         collections = client.list_collections()
         
         collection_names = [collection.name for collection in collections]
-        logger.info(f"Found {len(collection_names)} collections for user {user_email}: {collection_names}")
+        user_logger.info(f"Found {len(collection_names)} collections for user {user_email}: {collection_names}")
         
         return collection_names
         
     except Exception as e:
-        logger.error(f"Error discovering collections for user {user_email}: {e}")
+        user_logger.error(f"Error discovering collections for user {user_email}: {e}")
         return []
 
 
@@ -76,16 +79,19 @@ def query_collection(collection_name, user_query, db_path=None, user_email=None)
     Returns:
         JSON string containing query results with metadata and similarity scores
     """
+    # Use user-specific logger if user_email is available
+    user_logger = get_user_logger(user_email, "query_db") if user_email else logger
+    
     try:
         parts = collection_name.split("_")
         if len(parts) > 1:
             embedder_type = parts[-1]
-            logger.info(
+            user_logger.info(
                 f"Using embedder type '{embedder_type}' derived from collection name"
             )
         else:
             embedder_type = "openai"
-            logger.info(
+            user_logger.info(
                 "Using default embedder type 'openai' as collection name has no underscore"
             )
 
@@ -103,10 +109,10 @@ def query_collection(collection_name, user_query, db_path=None, user_email=None)
         # Ensure the db_path exists
         os.makedirs(db_path, exist_ok=True)
 
-        logger.info(
+        user_logger.info(
             f"Querying collection '{collection_name}' with: '{user_query[:50]}...'"
         )
-        logger.info(f"Using database path: {db_path}")
+        user_logger.info(f"Using database path: {db_path}")
         
         client = chromadb.PersistentClient(path=str(db_path))
 
@@ -140,12 +146,12 @@ def query_collection(collection_name, user_query, db_path=None, user_email=None)
                     }
                 )
 
-            logger.info(f"Found {len(result['results'])} results for query")
+            user_logger.info(f"Found {len(result['results'])} results for query")
             return json.dumps(result)
         else:
-            logger.warning(f"No results found for query: '{user_query[:50]}...'")
+            user_logger.warning(f"No results found for query: '{user_query[:50]}...'")
             return json.dumps({"query": user_query, "results": []})
 
     except Exception as e:
-        logger.error(f"Error querying collection: {e}")
+        user_logger.error(f"Error querying collection: {e}")
         return json.dumps({"error": str(e)})

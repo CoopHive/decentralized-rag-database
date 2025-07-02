@@ -15,6 +15,7 @@ import os
 from src.query.evaluation_agent import EvaluationAgent
 from src.scraper.openalex_scraper import OpenAlexScraper
 from src.scraper.config import ScraperConfig
+from src.utils.logging_utils import get_user_logger
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -54,12 +55,14 @@ def _scrape_papers_sync(scraper, cleanup_pdfs):
 
 def cleanup_zip_file(zip_path: str):
     """Background task to clean up zip file after serving."""
+    # Use system logger for cleanup operations
+    system_logger = get_user_logger("system", "light_server")
     try:
         if os.path.exists(zip_path):
             os.remove(zip_path)
-            logger.info(f"Cleaned up zip file: {zip_path}")
+            system_logger.info(f"Cleaned up zip file: {zip_path}")
     except Exception as e:
-        logger.warning(f"Error cleaning up zip file {zip_path}: {e}")
+        system_logger.warning(f"Error cleaning up zip file {zip_path}: {e}")
 
 # Define request/response models
 class EvaluationRequest(BaseModel):
@@ -100,6 +103,9 @@ def load_whitelisted_emails() -> set:
 @app.post("/api/auth/validate-email", response_model=EmailValidationResponse)
 async def validate_email(request: EmailValidationRequest):
     """Validate if an email is whitelisted"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(request.email, "email_validation")
+    
     try:
         whitelisted_emails = load_whitelisted_emails()
         email = request.email.lower()
@@ -107,16 +113,22 @@ async def validate_email(request: EmailValidationRequest):
         # Check if email is in whitelist
         is_valid = email in whitelisted_emails
         
+        user_logger.info(f"Email validation request: {email} - Valid: {is_valid}")
+        
         return EmailValidationResponse(isValid=is_valid)
     except Exception as e:
+        user_logger.error(f"Error validating email: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error validating email: {str(e)}")
 
 @app.post("/api/research/scrape")
 async def scrape_research_papers(request: ResearchScrapeRequest, background_tasks: BackgroundTasks):
     """Scrape research papers from OpenAlex and return zip file"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(request.user_email, "research_scrape")
+    
     try:
-        logger.info(f"[SCRAPE] Starting research scrape for: {request.research_area}")
-        logger.info(f"[SCRAPE] User email: {request.user_email}")
+        user_logger.info(f"Starting research scrape for: {request.research_area}")
+        user_logger.info(f"User email: {request.user_email}")
         
         # Validate research area
         if not request.research_area.strip():
@@ -141,8 +153,8 @@ async def scrape_research_papers(request: ResearchScrapeRequest, background_task
         )
         
         if success and zip_path:
-            logger.info(f"[SCRAPE] Successfully completed for {request.user_email}")
-            logger.info(f"[SCRAPE] Returning zip file: {zip_path}")
+            user_logger.info(f"Successfully completed scraping for {request.user_email}")
+            user_logger.info(f"Returning zip file: {zip_path}")
             
             # Schedule cleanup of the zip file after response is sent
             background_tasks.add_task(cleanup_zip_file, zip_path)
@@ -162,24 +174,27 @@ async def scrape_research_papers(request: ResearchScrapeRequest, background_task
                 }
             )
         else:
-            logger.error(f"[SCRAPE] Failed for {request.user_email}: {result_message}")
+            user_logger.error(f"Scraping failed for {request.user_email}: {result_message}")
             raise HTTPException(status_code=404, detail=result_message)
             
     except HTTPException:
         raise
     except Exception as e:
         error_msg = f"Error scraping research papers: {str(e)}"
-        logger.error(f"[SCRAPE] {error_msg}")
+        user_logger.error(error_msg)
         raise HTTPException(status_code=500, detail=error_msg)
 
 @app.post("/api/evaluate")
 async def evaluate_endpoint(request: EvaluationRequest):
     """Endpoint for evaluation - fast queries"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(request.user_email, "evaluation")
+    
     try:
-        print(f"[LIGHT] Evaluating query: {request.query}")
-        print(f"[LIGHT] DB Path: {request.db_path}")
-        print(f"[LIGHT] Model Name: {request.model_name}")
-        print(f"[LIGHT] User Email: {request.user_email}")
+        user_logger.info(f"Evaluating query: {request.query}")
+        user_logger.debug(f"DB Path: {request.db_path}")
+        user_logger.debug(f"Model Name: {request.model_name}")
+        user_logger.info(f"User Email: {request.user_email}")
         
         # Construct user-specific database path if not provided
         if request.db_path is None:
@@ -188,7 +203,7 @@ async def evaluate_endpoint(request: EvaluationRequest):
         else:
             user_db_path = request.db_path
         
-        print(f"[LIGHT] Using database path: {user_db_path}")
+        user_logger.info(f"Using database path: {user_db_path}")
         
         # Initialize evaluation agent
         agent = EvaluationAgent(model_name=request.model_name)
@@ -204,24 +219,33 @@ async def evaluate_endpoint(request: EvaluationRequest):
         with open(results_file, 'r') as f:
             results = json.load(f)
         
+        user_logger.info(f"Successfully completed evaluation query")
         return results
     except Exception as e:
+        user_logger.error(f"Error in evaluation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/status")
 async def get_user_status(user_email: str):
     """Get processing status for a specific user - fast status check"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(user_email, "status_check")
+    
     jobs_file = PROJECT_ROOT / "temp" / "jobs.json"
     try:
         with open(jobs_file, 'r') as f:
             jobs = json.load(f)
         total_jobs, completed_jobs = jobs.get(user_email, [0, 0])
+        
+        user_logger.debug(f"Status check: {completed_jobs}/{total_jobs} jobs completed")
+        
         return {
             "total_jobs": total_jobs,
             "completed_jobs": completed_jobs,
             "completion_percentage": (completed_jobs / total_jobs) * 100
         }
     except Exception as e:
+        user_logger.error(f"Error getting user status: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")

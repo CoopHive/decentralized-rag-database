@@ -15,6 +15,7 @@ from src.query.evaluation_agent import EvaluationAgent
 from src.utils.gdrive_scraper import scrape_gdrive_pdfs
 from src.core.processor_main import process_combination
 from src.db.db_creator_main import create_user_database
+from src.utils.logging_utils import get_user_logger
 
 # Setup FastAPI app
 app = FastAPI(
@@ -78,11 +79,14 @@ class UserStatusResponse(BaseModel):
 @app.post("/api/evaluate")
 async def evaluate_endpoint(request: EvaluationRequest):
     """Endpoint for evaluation (maps to run_evaluation.sh)"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(request.user_email, "evaluation")
+    
     try:
-        print(f"Evaluating query: {request.query}")
-        print(f"DB Path: {request.db_path}")
-        print(f"Model Name: {request.model_name}")
-        print(f"User Email: {request.user_email}")
+        user_logger.info(f"Evaluating query: {request.query}")
+        user_logger.debug(f"DB Path: {request.db_path}")
+        user_logger.debug(f"Model Name: {request.model_name}")
+        user_logger.info(f"User Email: {request.user_email}")
         
         # Construct user-specific database path if not provided
         if request.db_path is None:
@@ -91,7 +95,7 @@ async def evaluate_endpoint(request: EvaluationRequest):
         else:
             user_db_path = request.db_path
         
-        print(f"Using database path: {user_db_path}")
+        user_logger.info(f"Using database path: {user_db_path}")
         
         # Initialize evaluation agent
         agent = EvaluationAgent(model_name=request.model_name)
@@ -107,8 +111,10 @@ async def evaluate_endpoint(request: EvaluationRequest):
         with open(results_file, 'r') as f:
             results = json.load(f)
         
+        user_logger.info("Successfully completed evaluation query")
         return results
     except Exception as e:
+        user_logger.error(f"Error in evaluation: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 class EmbedRequest(BaseModel):
@@ -117,18 +123,23 @@ class EmbedRequest(BaseModel):
 @app.post("/api/embed")
 async def embed_endpoint(request: EmbedRequest):
     """Endpoint to create user database"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(request.user_email, "embed_database")
+    
     try:
-        print(f"Creating database for user: {request.user_email}")
+        user_logger.info(f"Creating database for user: {request.user_email}")
         
         # Create user database
         create_user_database(request.user_email)
         
+        user_logger.info(f"Successfully created database for user: {request.user_email}")
         return {
             "success": True,
             "message": f"Successfully created database for user: {request.user_email}",
             "user_email": request.user_email
         }
     except Exception as e:
+        user_logger.error(f"Error creating user database: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error creating user database: {str(e)}")
 
 @app.post("/api/ingest/gdrive", response_model=IngestGDriveResponse)
@@ -140,7 +151,13 @@ async def ingest_gdrive_pdfs(request: IngestGDriveRequest):
     and downloads them to a user-specific papers directory.
     It also creates a Cartesian product of all converter, chunker, and embedder combinations.
     """
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(request.user_email, "gdrive_ingestion")
+    
     try:
+        user_logger.info(f"Processing Google Drive ingestion for user: {request.user_email}")
+        user_logger.info(f"Drive URL: {request.drive_url}")
+        
         # Validate the Google Drive URL
         if "drive.google.com" not in request.drive_url:
             raise HTTPException(
@@ -195,13 +212,17 @@ async def ingest_gdrive_pdfs(request: IngestGDriveRequest):
             for converter, chunker, embedder in processing_combinations
         ]
         
+        user_logger.info(f"Will process {len(processing_combinations)} combinations")
+        
         # Download PDFs from Google Drive to user-specific papers folder
         downloaded_files = scrape_gdrive_pdfs(
             drive_url=request.drive_url,
-            download_dir=user_papers_dir
+            download_dir=user_papers_dir,
+            user_email=request.user_email
         )
         
         if not downloaded_files:
+            user_logger.warning("No PDF files found or downloaded from the Google Drive folder")
             return IngestGDriveResponse(
                 success=False,
                 message="No PDF files found or downloaded from the Google Drive folder",
@@ -210,9 +231,12 @@ async def ingest_gdrive_pdfs(request: IngestGDriveRequest):
                 processing_combinations=combination_strings
             )
         
+        user_logger.info(f"Downloaded {len(downloaded_files)} files, starting processing...")
+        
         # Process each combination
         for converter, chunker, embedder in processing_combinations:
             try:
+                user_logger.info(f"Processing combination: {converter}_{chunker}_{embedder}")
                 # Call the processor for this specific combination with user-specific db path
                 
                 await process_combination(
@@ -224,11 +248,13 @@ async def ingest_gdrive_pdfs(request: IngestGDriveRequest):
                     user_email=request.user_email
                 )
                 
+                user_logger.info(f"Successfully completed combination: {converter}_{chunker}_{embedder}")
                 # Create user database after processing
             except Exception as e:
                 # Log the error but continue with other combinations
-                print(f"Error processing combination {converter}_{chunker}_{embedder}: {str(e)}")
+                user_logger.error(f"Error processing combination {converter}_{chunker}_{embedder}: {str(e)}")
         
+        user_logger.info("All processing combinations completed")
         return IngestGDriveResponse(
             success=True,
             message=f"Successfully processed {len(downloaded_files)} PDF files with {len(processing_combinations)} combinations and cleaned up papers/ directory.",
@@ -238,13 +264,18 @@ async def ingest_gdrive_pdfs(request: IngestGDriveRequest):
         )
         
     except ValueError as e:
+        user_logger.error(f"Validation error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        user_logger.error(f"Error ingesting PDFs: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error ingesting PDFs: {str(e)}")
 
 @app.get("/api/status")
 async def get_user_status(user_email: str):
     """Get processing status for a specific user"""
+    # Create user-specific logger for this request
+    user_logger = get_user_logger(user_email, "status_check")
+    
     try:
         # Construct user-specific paths
         papers_directory = PROJECT_ROOT / "papers" / user_email
@@ -272,6 +303,8 @@ async def get_user_status(user_email: str):
         else:
             completion_percentage = (completed_jobs / total_papers) * 100.0
         
+        user_logger.debug(f"Status check: {completed_jobs} jobs completed for {total_papers} papers")
+        
         return UserStatusResponse(
             user_email=user_email,
             total_papers=total_papers,
@@ -282,6 +315,7 @@ async def get_user_status(user_email: str):
         )
         
     except Exception as e:
+        user_logger.error(f"Error getting user status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error getting user status: {str(e)}")
 
 if __name__ == '__main__':
